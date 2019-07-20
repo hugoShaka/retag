@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -26,6 +27,9 @@ type Image struct {
 
 func main() {
 	log.SetLevel(log.DebugLevel)
+
+	// Parsing stuff.
+
 	source := "reg.localhost/image1:v1"
 	dest := "reg.localhost/image2"
 	sourceRef, err := parseImageRef(source)
@@ -43,6 +47,9 @@ func main() {
 	scheme := "http://"
 	url := fmt.Sprintf("%s%s/v2/", scheme, sourceRef.registry)
 	log.Debugf("Base url : %s", url)
+
+	// Checking if registry is alive and we're logged in.
+
 	logged, err := checkRegistry(url)
 	if err != nil {
 		fatal("Error checking the registry : %s", err)
@@ -51,8 +58,29 @@ func main() {
 		fatal("Login not implemented yet", nil)
 	}
 	log.Infof("Registry reachable")
+
+	// Getting the source manifest.
+
 	image := getManifest(url, sourceRef)
+	log.Info("Manifest retrieved and parsed")
 	log.Debugf("Image data : %s", image)
+
+	// Mouting each blob from source to destination.
+
+	for i := 0; i < len(image.layers); i++ {
+		mountBlob(url, image.layers[i], sourceRef, destRef)
+	}
+
+	// Mounting configuration.
+
+	mountBlob(url, image.config, sourceRef, destRef)
+
+	// Posting new manifest.
+
+	postManifest(url, destRef, image)
+
+	log.Info("Image successfully retagged")
+	log.Exit(0)
 }
 
 func fatal(format string, err error) {
@@ -70,19 +98,27 @@ func parseImageRef(ref string) (ImageRef, error) {
 		err := fmt.Errorf("Error parsing image ref, no registry found : %s", ref)
 		return ImageRef{}, err
 	}
+
+	// Registry is first part, this parser does not support or intend to support
+	// non-FullyQualifiedImageRefs.
+
 	registry := parts[0]
 	var tag string
 	log.Debugf("registry : %s", registry)
 
+	// Getting the tag.
 	lastPart := strings.Split(parts[len(parts)-1], ":")
 	switch len(lastPart) {
 	case 1:
+		// We have no tag, defaulting to latest.
 		tag = "latest"
 		log.Debugf("tag : %s", tag)
 	case 2:
+		// We have a tag, using it.
 		tag = lastPart[1]
 		log.Debugf("tag : %s", tag)
 	default:
+		// More than a tag ? Image ref likely invalid.
 		err := fmt.Errorf("Error parsing image ref, multiple ':' in last part : %s", ref)
 		return ImageRef{}, err
 	}
@@ -93,6 +129,8 @@ func parseImageRef(ref string) (ImageRef, error) {
 }
 
 func checkRegistry(url string) (bool, error) {
+	// Basically does a GET on /v2/
+	// Will perform auth later.
 	res, err := http.Get(url)
 	log.Debugf("Registry response : %v", res)
 	defer res.Body.Close()
@@ -100,7 +138,7 @@ func checkRegistry(url string) (bool, error) {
 	return res.StatusCode == http.StatusOK, err
 }
 
-// Manifest : Struct used to unmarshall a v2 manifest
+// Manifest : Struct used to unmarshall a v2 manifest.
 type Manifest struct {
 	SchemaVersion int        `json:"schemaVersion"`
 	MediaType     string     `json:"mediaType"`
@@ -108,7 +146,7 @@ type Manifest struct {
 	Layers        []BlobInfo `json:"layers"`
 }
 
-// BlobInfo : Struct used to unmarshall a v2 manifest blob info
+// BlobInfo : Struct used to unmarshall a v2 manifest blob info.
 type BlobInfo struct {
 	MediaType string `json:"mediaType"`
 	Size      int    `json:"size"`
@@ -116,6 +154,7 @@ type BlobInfo struct {
 }
 
 func getManifest(url string, img ImageRef) Image {
+	// Retrieves a manifest and put it into the Image struct.
 	url = fmt.Sprintf("%s%s/manifests/%s", url, img.repository, img.tag)
 	log.Debugf("Getting manifest at URL : %s", url)
 	client := &http.Client{}
@@ -131,6 +170,8 @@ func getManifest(url string, img ImageRef) Image {
 		fatal("Non 200 status code recieved when requesting manifest", nil)
 	}
 
+	// Decoding JSON.
+
 	manifest := Manifest{}
 	err = json.NewDecoder(res.Body).Decode(&manifest)
 	if err != nil {
@@ -138,10 +179,82 @@ func getManifest(url string, img ImageRef) Image {
 	}
 	log.Debugf("Decoded manifest : %v", manifest)
 
+	// Parsing layers to extract only digests.
+
 	layers := make([]string, 0)
 	config := manifest.Config.Digest
 	for i := 0; i < len(manifest.Layers); i++ {
 		layers = append(layers, manifest.Layers[i].Digest)
 	}
+
 	return Image{layers, config, manifest}
+}
+
+func mountBlob(baseURL string, blob string, src ImageRef, dst ImageRef) {
+	// Mounts a blob from the same repository.
+
+	// First, checks if blob exists.
+	url := fmt.Sprintf("%s%s/blobs/%s", baseURL, dst.repository, blob)
+	res, err := http.Head(url)
+	if err != nil {
+		fatal("Error checking if blob already present : %s", err)
+	}
+	switch res.StatusCode {
+	case http.StatusOK:
+		// The blob already exists, doing nothing.
+		log.Infof("Blob %s already exists", blob)
+	case http.StatusNotFound:
+		// The blob does not exists, needs to be mounted.
+		log.Debugf("Blob %s does not exist, mounting", blob)
+
+		url := fmt.Sprintf("%s%s/blobs/uploads/", baseURL, dst.repository)
+
+		client := &http.Client{}
+		req, _ := http.NewRequest("POST", url, nil)
+
+		q := req.URL.Query()
+		q.Add("from", src.repository)
+		q.Add("mount", blob)
+		req.URL.RawQuery = q.Encode()
+
+		log.Debugf("Mouting layer query string : %s", req.URL.String())
+
+		res, err := client.Do(req)
+		if err != nil {
+			fatal("Error requesting the manifest : %s", err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusCreated {
+			fatal(fmt.Sprintf("Expecting a 201 created on blob %s, got %d", blob, res.StatusCode), nil)
+		}
+		log.Infof("Blob %s mounted", blob)
+	default:
+		// We don't know what's going on, aborting.
+		fatal(fmt.Sprintf("Unknown status code %d obtained when mounting blob %s", res.StatusCode, blob), nil)
+	}
+
+}
+
+func postManifest(baseURL string, dst ImageRef, img Image) {
+	// This uploads a manifest to a given repository. It's technically a PUT.
+	// Blobs (layers & config) should be present before upload (put or mounted).
+
+	client := &http.Client{}
+
+	url := fmt.Sprintf("%s%s/manifests/%s", baseURL, dst.repository, dst.tag)
+	buf := new(bytes.Buffer)
+	json.NewEncoder(buf).Encode(img.manifest)
+
+	req, _ := http.NewRequest("PUT", url, buf)
+	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		fatal("Error requesting the manifest : %s", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		fatal(fmt.Sprintf("Error posting manifest, waiting 201, got %d", res.StatusCode), nil)
+	}
+	log.Info("Manifest uploaded")
 }
