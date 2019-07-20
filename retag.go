@@ -132,6 +132,10 @@ func checkRegistry(url string) (bool, error) {
 	// Basically does a GET on /v2/
 	// Will perform auth later.
 	res, err := http.Get(url)
+	if err != nil {
+		fatal("Error contacting the registry : %s", err)
+	}
+
 	log.Debugf("Registry response : %v", res)
 	defer res.Body.Close()
 
