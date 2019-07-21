@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -26,12 +27,27 @@ type Image struct {
 }
 
 func main() {
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
 
 	// Parsing stuff.
 
-	source := "reg.localhost/image1:v1"
-	dest := "reg.localhost/image2"
+	insecurePtr := flag.Bool("insecure", false, "use http instead of https")
+	debugPtr := flag.Bool("debug", false, "sets verbosity level to debug")
+
+	flag.Parse()
+	if *debugPtr {
+		log.SetLevel(log.DebugLevel)
+	}
+	log.Debugln("insecure:", *insecurePtr)
+	args := flag.Args()
+	log.Debugln("tail:", args)
+
+	if len(args) != 2 {
+		fatal("Please specify only two arguments (src and dest)", nil)
+	}
+
+	source := args[0]
+	dest := args[1]
 	sourceRef, err := parseImageRef(source)
 	if err != nil {
 		fatal("Invalid source image ref %s", err)
@@ -44,7 +60,12 @@ func main() {
 		fatal("Images not in the same registry", nil)
 	}
 
-	scheme := "http://"
+	var scheme string
+	if *insecurePtr {
+		scheme = "http://"
+	} else {
+		scheme = "https://"
+	}
 	url := fmt.Sprintf("%s%s/v2/", scheme, sourceRef.registry)
 	log.Debugf("Base url : %s", url)
 
