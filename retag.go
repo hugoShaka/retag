@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -32,6 +33,8 @@ func main() {
 	// Parsing stuff.
 
 	insecurePtr := flag.Bool("insecure", false, "use http instead of https")
+	userPtr := flag.String("user", "", "specify auth user")
+	passwordPtr := flag.String("pass", "", "specify auth password")
 	debugPtr := flag.Bool("debug", false, "sets verbosity level to debug")
 
 	flag.Parse()
@@ -75,11 +78,19 @@ func main() {
 	if err != nil {
 		fatal("Error checking the registry : %s", err)
 	}
-	if !logged {
-		fatal("Login not implemented yet", nil)
-	}
-	log.Infof("Registry reachable")
 
+	var token string
+
+	switch {
+	case !logged && (len(*userPtr) != 0):
+		token = loginRegistry(url, *userPtr, *passwordPtr, sourceRef, destRef)
+	case (!logged && (len(*userPtr) == 0)):
+		log.Fatal("Registry needs authentication, please use -user and -password")
+	default:
+		log.Infof("Registry reachable")
+	}
+
+	log.Infof("Token : %s", token)
 	// Getting the source manifest.
 
 	image := getManifest(url, sourceRef)
@@ -161,6 +172,56 @@ func checkRegistry(url string) (bool, error) {
 	defer res.Body.Close()
 
 	return res.StatusCode == http.StatusOK, err
+}
+
+type token struct {
+	Token string `json:"token"`
+}
+
+func loginRegistry(url string, user string, password string, sourceRef ImageRef, destRef ImageRef) string {
+	// Contacting the registry to get the challenge realm
+	res, err := http.Get(url)
+	if err != nil {
+		fatal("Error contacting the registry : %s", err)
+	}
+
+	log.Debugf("Registry response : %v", res)
+	authHeader := res.Header.Get("Www-Authenticate")
+	log.Debugf("Www-Authenticate : %s", authHeader)
+
+	// Parsing the header WWW-Authenticate
+	re := regexp.MustCompile(`Bearer realm="(https://.*)",service="(.*)"`)
+	data := re.FindStringSubmatch(authHeader)
+	realm := data[1]
+	service := data[2]
+
+	// Constructing the scope
+	scope := fmt.Sprintf("repository:%s:pull repository:%s:pull,push", sourceRef.repository, destRef.repository)
+
+	// Constructing the query
+	client := &http.Client{}
+	req, _ := http.NewRequest("GET", realm, nil)
+	q := req.URL.Query()
+	q.Add("service", service)
+	q.Add("scope", scope)
+	req.URL.RawQuery = q.Encode()
+	log.Debugf("Requesting token query string : %s", req.URL.String())
+	req.SetBasicAuth(user, password)
+
+	// Sending the query
+	res, err = client.Do(req)
+	if err != nil {
+		fatal("Error requesting token : %s", err)
+	}
+	log.Debugf("Token query answer %v", res)
+
+	token := token{}
+	json.NewDecoder(res.Body).Decode(&token)
+
+	log.Info("Token obtained")
+	log.Debugf("Token : %s", token.Token)
+
+	return token.Token
 }
 
 // Manifest : Struct used to unmarshall a v2 manifest.
