@@ -44,3 +44,13 @@ dockers:
     - "hugoshaka/retag:debian-v{{ .Major }}"
     skip_push: true
     dockerfile: Dockerfile.debian
+  - goos: linux
+    goarch: amd64
+    binaries:
+    - retag
+    image_templates:
+    - "hugoshaka/retag:alpine"
+    - "hugoshaka/retag:alpine-{{ .Tag }}"
+    - "hugoshaka/retag:alpine-v{{ .Major }}"
+    skip_push: true
+    dockerfile: Dockerfile.alpine

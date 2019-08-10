@@ -1,0 +1,5 @@
+FROM alpine
+RUN apk add -U --no-cache ca-certificates
+
+COPY retag /usr/local/bin/retag
+ENTRYPOINT ["/usr/local/bin/retag"]
