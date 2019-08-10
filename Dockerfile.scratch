@@ -1,0 +1,8 @@
+FROM debian:sid AS certs
+RUN apt-get update && \
+  apt-get install -yq ca-certificates --no-install-recommends
+
+FROM scratch
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY retag /
+ENTRYPOINT ["/retag"]
