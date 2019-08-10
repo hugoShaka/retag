@@ -196,14 +196,15 @@ func loginRegistry(url string, user string, password string, sourceRef ImageRef,
 	service := data[2]
 
 	// Constructing the scope
-	scope := fmt.Sprintf("repository:%s:pull repository:%s:pull,push", sourceRef.repository, destRef.repository)
-
+	scopeSource := fmt.Sprintf("repository:%s:pull", sourceRef.repository)
+	scopeDest := fmt.Sprintf("repository:%s:pull,push", destRef.repository)
 	// Constructing the query
 	client := &http.Client{}
 	req, _ := http.NewRequest("GET", realm, nil)
 	q := req.URL.Query()
 	q.Add("service", service)
-	q.Add("scope", scope)
+	q.Add("scope", scopeSource)
+	q.Add("scope", scopeDest)
 	req.URL.RawQuery = q.Encode()
 	log.Debugf("Requesting token query string : %s", req.URL.String())
 	req.SetBasicAuth(user, password)
