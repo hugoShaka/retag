@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"regexp"
@@ -26,6 +27,8 @@ type Image struct {
 	config   string
 	manifest interface{}
 }
+
+const contentType string = "application/vnd.docker.distribution.manifest.v2+json"
 
 func main() {
 	log.SetLevel(log.InfoLevel)
@@ -90,26 +93,23 @@ func main() {
 		log.Infof("Registry reachable")
 	}
 
-	log.Infof("Token : %s", token)
-	// Getting the source manifest.
-
-	image := getManifest(url, sourceRef)
+	image := getManifest(url, sourceRef, token)
 	log.Info("Manifest retrieved and parsed")
 	log.Debugf("Image data : %s", image)
 
 	// Mouting each blob from source to destination.
 
 	for i := 0; i < len(image.layers); i++ {
-		mountBlob(url, image.layers[i], sourceRef, destRef)
+		mountBlob(url, image.layers[i], sourceRef, destRef, token)
 	}
 
 	// Mounting configuration.
 
-	mountBlob(url, image.config, sourceRef, destRef)
+	mountBlob(url, image.config, sourceRef, destRef, token)
 
 	// Posting new manifest.
 
-	postManifest(url, destRef, image)
+	postManifest(url, destRef, image, token)
 
 	log.Info("Image successfully retagged")
 	log.Exit(0)
@@ -239,13 +239,13 @@ type BlobInfo struct {
 	Digest    string `json:"digest"`
 }
 
-func getManifest(url string, img ImageRef) Image {
+func getManifest(url string, img ImageRef, token string) Image {
 	// Retrieves a manifest and put it into the Image struct.
 	url = fmt.Sprintf("%s%s/manifests/%s", url, img.repository, img.tag)
 	log.Debugf("Getting manifest at URL : %s", url)
 	client := &http.Client{}
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Accept", "application/vnd.docker.distribution.manifest.v2+json")
+	req := createRequest("GET", url, nil, token)
+	req.Header.Set("Accept", contentType)
 	res, err := client.Do(req)
 	if err != nil {
 		fatal("Error requesting the manifest : %s", err)
@@ -276,15 +276,21 @@ func getManifest(url string, img ImageRef) Image {
 	return Image{layers, config, manifest}
 }
 
-func mountBlob(baseURL string, blob string, src ImageRef, dst ImageRef) {
+func mountBlob(baseURL string, blob string, src ImageRef, dst ImageRef, token string) {
 	// Mounts a blob from the same repository.
+
+	client := &http.Client{}
 
 	// First, checks if blob exists.
 	url := fmt.Sprintf("%s%s/blobs/%s", baseURL, dst.repository, blob)
-	res, err := http.Head(url)
+	req := createRequest("HEAD", url, nil, token)
+
+	res, err := client.Do(req)
 	if err != nil {
 		fatal("Error checking if blob already present : %s", err)
 	}
+	defer res.Body.Close()
+
 	switch res.StatusCode {
 	case http.StatusOK:
 		// The blob already exists, doing nothing.
@@ -295,8 +301,7 @@ func mountBlob(baseURL string, blob string, src ImageRef, dst ImageRef) {
 
 		url := fmt.Sprintf("%s%s/blobs/uploads/", baseURL, dst.repository)
 
-		client := &http.Client{}
-		req, _ := http.NewRequest("POST", url, nil)
+		req := createRequest("POST", url, nil, token)
 
 		q := req.URL.Query()
 		q.Add("from", src.repository)
@@ -305,7 +310,7 @@ func mountBlob(baseURL string, blob string, src ImageRef, dst ImageRef) {
 
 		log.Debugf("Mouting layer query string : %s", req.URL.String())
 
-		res, err := client.Do(req)
+		res, err = client.Do(req)
 		if err != nil {
 			fatal("Error requesting the manifest : %s", err)
 		}
@@ -321,7 +326,7 @@ func mountBlob(baseURL string, blob string, src ImageRef, dst ImageRef) {
 
 }
 
-func postManifest(baseURL string, dst ImageRef, img Image) {
+func postManifest(baseURL string, dst ImageRef, img Image, token string) {
 	// This uploads a manifest to a given repository. It's technically a PUT.
 	// Blobs (layers & config) should be present before upload (put or mounted).
 
@@ -331,8 +336,8 @@ func postManifest(baseURL string, dst ImageRef, img Image) {
 	buf := new(bytes.Buffer)
 	json.NewEncoder(buf).Encode(img.manifest)
 
-	req, _ := http.NewRequest("PUT", url, buf)
-	req.Header.Set("Content-Type", "application/vnd.docker.distribution.manifest.v2+json")
+	req := createRequest("PUT", url, buf, token)
+	req.Header.Set("Content-Type", contentType)
 
 	res, err := client.Do(req)
 	if err != nil {
@@ -343,4 +348,15 @@ func postManifest(baseURL string, dst ImageRef, img Image) {
 		fatal(fmt.Sprintf("Error posting manifest, waiting 201, got %d", res.StatusCode), nil)
 	}
 	log.Info("Manifest uploaded")
+}
+
+func createRequest(verb string, url string, buf io.Reader, token string) *http.Request {
+	req, err := http.NewRequest(verb, url, buf)
+	if err != nil {
+		fatal("Error creating request : %s", err)
+	}
+	if len(token) != 0 {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	}
+	return req
 }
