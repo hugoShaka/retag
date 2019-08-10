@@ -32,7 +32,6 @@ dockers:
     - "hugoshaka/retag:scratch"
     - "hugoshaka/retag:scratch-{{ .Tag }}"
     - "hugoshaka/retag:scratch-v{{ .Major }}"
-    skip_push: true
     dockerfile: Dockerfile.scratch
   - goos: linux
     goarch: amd64
@@ -42,7 +41,6 @@ dockers:
     - "hugoshaka/retag:debian"
     - "hugoshaka/retag:debian-{{ .Tag }}"
     - "hugoshaka/retag:debian-v{{ .Major }}"
-    skip_push: true
     dockerfile: Dockerfile.debian
   - goos: linux
     goarch: amd64
@@ -52,5 +50,4 @@ dockers:
     - "hugoshaka/retag:alpine"
     - "hugoshaka/retag:alpine-{{ .Tag }}"
     - "hugoshaka/retag:alpine-v{{ .Major }}"
-    skip_push: true
     dockerfile: Dockerfile.alpine
