@@ -17,12 +17,13 @@ Usage of ./retag:
         sets verbosity level to debug
   -insecure
         use http instead of https
+  -pass string
+        specify auth password
+  -user string
+        specify auth user
 
 Examples:
 ./retag -insecure nohttps.com/foo/bar/image:v1 nohttps.com/baz/prod:v5
 ./retag registry.com/img registry.com/hello:v9
+./retag -user foo -password bar registry.com/img registry.com/hello:v9
 ```
-
-Not yet implemented : 
-* authentication
-
