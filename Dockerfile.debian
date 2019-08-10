@@ -1,0 +1,7 @@
+FROM debian:sid-slim
+RUN apt-get update && \
+  apt-get install -yq ca-certificates --no-install-recommends && \
+  rm -rf /var/lib/apt/lists/*
+
+COPY retag /usr/local/bin/retag
+ENTRYPOINT ["retag"]

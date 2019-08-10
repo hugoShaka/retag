@@ -34,3 +34,13 @@ dockers:
     - "hugoshaka/retag:scratch-v{{ .Major }}"
     skip_push: true
     dockerfile: Dockerfile.scratch
+  - goos: linux
+    goarch: amd64
+    binaries:
+    - retag
+    image_templates:
+    - "hugoshaka/retag:debian"
+    - "hugoshaka/retag:debian-{{ .Tag }}"
+    - "hugoshaka/retag:debian-v{{ .Major }}"
+    skip_push: true
+    dockerfile: Dockerfile.debian
